@@ -579,26 +579,93 @@ export async function fetchDetailedTransactions(startDate, endDate, options = {}
 }
 
 /**
- * Fetches patient appointments for a given date
- * @param {string|number} patientId - Patient ID
- * @param {string} date - Date in YYYY-MM-DD format
- * @returns {Promise<Array>} List of appointments
+ * Cache for patient appointments (key: patientId, value: appointments array)
+ * Cleared each run cycle to avoid stale data
  */
-export async function fetchPatientAppointments(patientId, date) {
-  try {
-    const response = await api.post('/api/reports/generate', {
-      report: 'schedule-appointments',
-      PACIENTE_ID: patientId,
-      DATA_INICIO: date,
-      DATA_FIM: date,
-    });
+const appointmentsCache = new Map();
 
-    return response.data.data || [];
+/**
+ * Clears the appointments cache (call at start of each run cycle)
+ */
+export function clearAppointmentsCache() {
+  appointmentsCache.clear();
+}
 
-  } catch (error) {
-    log.warn(`Não foi possível buscar agendamentos do paciente ${patientId}`, { erro: error.message });
-    return [];
+/**
+ * Fetches patient appointments from a given date onwards
+ * Uses GET /api/appoints/search endpoint with cache per patient
+ * Retries up to 3 times on transient errors (409, 5xx, network)
+ * @param {string|number} patientId - Patient ID
+ * @param {string} dateStr - Date in DD/MM/YYYY or YYYY-MM-DD format
+ * @returns {Promise<{appointments: Array, apiError: boolean}>}
+ */
+export async function fetchPatientAppointments(patientId, dateStr) {
+  const cacheKey = String(patientId);
+  if (appointmentsCache.has(cacheKey)) {
+    return appointmentsCache.get(cacheKey);
   }
+
+  // Convert date to DD-MM-YYYY (with dashes) for the API
+  let dataStart;
+  if (dateStr.includes('/')) {
+    dataStart = dateStr.replace(/\//g, '-');
+  } else {
+    const [y, m, d] = dateStr.split('-');
+    dataStart = `${d}-${m}-${y}`;
+  }
+
+  const MAX_RETRIES = 3;
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      const response = await api.get('/api/appoints/search', {
+        params: {
+          paciente_id: patientId,
+          data_start: dataStart,
+          data_end: dataStart,
+        },
+      });
+
+      const result = { appointments: response.data.content || [], apiError: false };
+      appointmentsCache.set(cacheKey, result);
+      return result;
+
+    } catch (error) {
+      const status = error.response?.status;
+      const isRetryable = !status || status === 409 || status >= 500;
+
+      if (isRetryable && attempt < MAX_RETRIES) {
+        log.warn(`Agendamentos paciente ${patientId}: erro ${status || 'network'}, tentativa ${attempt}/${MAX_RETRIES}`);
+        await new Promise(r => setTimeout(r, 500 * attempt));
+        continue;
+      }
+
+      log.warn(`Não foi possível buscar agendamentos do paciente ${patientId} após ${attempt} tentativa(s)`, {
+        erro: error.message,
+        status,
+      });
+      const errorResult = { appointments: [], apiError: true };
+      appointmentsCache.set(cacheKey, errorResult);
+      return errorResult;
+    }
+  }
+}
+
+/**
+ * Checks if patient has an appointment on the exact processing date
+ * Searches only for the exact date (data_start = data_end)
+ * @param {string|number} patientId - Patient ID
+ * @param {string} processingDate - Date being processed (DD/MM/YYYY or YYYY-MM-DD)
+ * @returns {Promise<{hasAppointmentToday: boolean, apiError: boolean}>}
+ */
+export async function checkAppointmentDate(patientId, processingDate) {
+  const { appointments, apiError } = await fetchPatientAppointments(patientId, processingDate);
+
+  if (apiError) {
+    return { hasAppointmentToday: false, apiError: true };
+  }
+
+  // data_start === data_end, so any result means appointment on that day
+  return { hasAppointmentToday: appointments.length > 0, apiError: false };
 }
 
 /**

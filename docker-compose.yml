@@ -9,6 +9,7 @@ services:
       - ONEDRIVE_GID=1000
       - ONEDRIVE_SINGLE_DIRECTORY=planilhas
       - ONEDRIVE_RESYNC=1
+      - ONEDRIVE_MONITOR_INTERVAL=45
     volumes:
       - ./onedrive:/onedrive/data
       - onedrive-config:/onedrive/conf

@@ -2,7 +2,7 @@ import ExcelJS from 'exceljs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { createLogger, logTable } from './logger.js';
-import { fetchGroupMapping } from './feegow.js';
+import { fetchGroupMapping, checkAppointmentDate } from './feegow.js';
 import { saveHistory } from './historico.js';
 
 const log = createLogger('Excel');
@@ -492,7 +492,7 @@ export async function updateSpreadsheet(transactions, date) {
     const excelRow = worksheet.getRow(lastRow);
 
     // Build row data
-    const { rowData, classificationDetails } = buildRow(group, date);
+    const { rowData, classificationDetails } = await buildRow(group, date);
 
     // Detailed log for each row
     log.debug(`Inserindo linha ${lastRow}`, {
@@ -614,7 +614,7 @@ export async function updateSpreadsheetCustom(workbook, sheetName, transactions,
 
   for (const group of groupedTransactions) {
     lastRow++;
-    const { rowData, classificationDetails } = buildRow(group, date);
+    const { rowData, classificationDetails } = await buildRow(group, date);
 
     const textColumns = [COLUMNS.NOME, COLUMNS.VENDA, COLUMNS.OBSERVACAO];
 
@@ -742,9 +742,9 @@ function groupTransactions(transactions) {
  * Returns ONLY columns that have values (does not include zeros)
  * @param {Object} group - Transaction group
  * @param {string} referenceDate - Reference date
- * @returns {Object} Object with columns and values (only significant values)
+ * @returns {Promise<Object>} Object with columns and values (only significant values)
  */
-function buildRow(group, referenceDate) {
+async function buildRow(group, referenceDate) {
   // Temporary objects to accumulate values
   const procedureValues = {};
   const paymentValues = {};
@@ -753,9 +753,9 @@ function buildRow(group, referenceDate) {
   // Process detailed items (procedures)
   let discountTotal = 0;
   for (const item of group.detailedItems) {
-    // Accumulate discounts
+    // Accumulate discounts (desconto is per unit, multiply by quantity)
     if (item.desconto && item.desconto > 0) {
-      discountTotal += item.desconto;
+      discountTotal += item.desconto * (item.quantidade || 1);
     }
 
     const { column, classificadoPor } = classifyProcedure(item.nome, item.procedimento_id);
@@ -773,6 +773,39 @@ function buildRow(group, referenceDate) {
       });
       continue;
     }
+
+    // Validate AVALIAÇÃO: check if appointment is for processing date or future
+    if (column === COLUMNS.AVALIACAO) {
+      const { hasAppointmentToday, apiError } = await checkAppointmentDate(
+        group.transactions[0].PacienteID,
+        referenceDate,
+      );
+
+      if (apiError) {
+        // API failed after retries — keep evaluation as normal (don't penalize patient)
+        log.warn(`Avaliação do paciente ${group.patientName}: API de agendamentos falhou, mantendo como avaliação`);
+      } else if (!hasAppointmentToday) {
+        // Signal payment (sinal) — no appointment on this date, skip procedure column
+        log.debug(`Avaliação do paciente ${group.patientName}: sinal antecipado (sem agendamento no dia)`);
+        classificationDetails.push({
+          tipo: 'procedimento',
+          procedimentoId: item.procedimento_id,
+          nome: item.nome,
+          valor: formatValue(item.valor),
+          quantidade: item.quantidade || 1,
+          desconto: item.desconto || 0,
+          colunaDestino: null,
+          colunaDestinoNome: 'SINAL_ANTECIPADO',
+          classificadoPor: 'agendamento-futuro',
+        });
+        // Undo discount accumulation for this item (it's not a realized procedure)
+        if (item.desconto && item.desconto > 0) {
+          discountTotal -= item.desconto * (item.quantidade || 1);
+        }
+        continue;
+      }
+    }
+
     procedureValues[column] = (procedureValues[column] || 0) + formatValue(item.valor);
     classificationDetails.push({
       tipo: 'procedimento',
