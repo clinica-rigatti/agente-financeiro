@@ -225,6 +225,14 @@ const PAYMENT_MAPPING = {
 let groupMapping = null;
 
 /**
+ * Loads the group mapping from the API (needed before calling buildRow externally)
+ */
+async function loadGroupMapping() {
+  groupMapping = await fetchGroupMapping();
+  return groupMapping;
+}
+
+/**
  * Identifies the correct column for a procedure
  * Priority: 1) Procedure ID (via API groups), 2) Name (pattern matching)
  * @param {string} procedureName - Procedure name
@@ -920,4 +928,4 @@ async function buildRow(group, referenceDate) {
 }
 
 // Exports for history service
-export { COLUMNS, COLUMN_NAMES, MONTH_NAMES_PT };
+export { COLUMNS, COLUMN_NAMES, MONTH_NAMES_PT, groupTransactions, buildRow, loadGroupMapping };
