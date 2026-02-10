@@ -1,0 +1,23 @@
+# Dependências
+node_modules/
+
+# Ambiente
+.env
+
+# Logs
+logs/
+*.log
+
+# Pasta sincronizada (dados sensíveis)
+onedrive/
+
+# Session cache
+config/feegow-session.json
+
+# Sistema
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/

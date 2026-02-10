@@ -1,0 +1,102 @@
+{
+  "periodo": {
+    "dataInicio": "01/03/2026",
+    "dataFim": "04/03/2026"
+  },
+  "buscadoEm": "2026-02-05T14:53:14.252Z",
+  "total": "26.850,73",
+  "quantidade": 7,
+  "movimentacoes": [
+    {
+      "data": "02/03/2026",
+      "dataOrdem": "2026-03-02",
+      "formaPagamento": "Crédito",
+      "pagador": "Thaís Moraes Lange",
+      "pagadorLink": "https://app3.feegow.com/main/?P=sys_financialCurrentAccounts&I=9&Pers=1",
+      "profissional": "Pamela Fatima Gusmao",
+      "profissionalLink": "https://app3.feegow.com/main/?P=Profissionais&I=4&Pers=1",
+      "valor": 7500,
+      "valorFormatado": "7.500,00",
+      "pagadorId": "9",
+      "profissionalId": "4"
+    },
+    {
+      "data": "02/03/2026",
+      "dataOrdem": "2026-03-02",
+      "formaPagamento": "Crédito",
+      "pagador": "Isabel Cristina Telles Borges",
+      "pagadorLink": "https://app3.feegow.com/main/?P=sys_financialCurrentAccounts&I=25&Pers=1",
+      "profissional": "Pamela Fatima Gusmao,Pamela Fatima Gusmao",
+      "profissionalLink": "https://app3.feegow.com/main/?P=Profissionais&I=4&Pers=1",
+      "valor": 10358.4,
+      "valorFormatado": "10.358,40",
+      "pagadorId": "25",
+      "profissionalId": "4"
+    },
+    {
+      "data": "02/03/2026",
+      "dataOrdem": "2026-03-02",
+      "formaPagamento": "PIX",
+      "pagador": "Aline Maria de Arruda",
+      "pagadorLink": "https://app3.feegow.com/main/?P=sys_financialCurrentAccounts&I=6&Pers=1",
+      "profissional": "Luiz Henrique Rigatti",
+      "profissionalLink": "https://app3.feegow.com/main/?P=Profissionais&I=1&Pers=1",
+      "valor": 480,
+      "valorFormatado": "480,00",
+      "pagadorId": "6",
+      "profissionalId": "1"
+    },
+    {
+      "data": "02/03/2026",
+      "dataOrdem": "2026-03-02",
+      "formaPagamento": "Boleto",
+      "pagador": "Leoni Maria Kuhnen",
+      "pagadorLink": "https://app3.feegow.com/main/?P=sys_financialCurrentAccounts&I=2&Pers=1",
+      "profissional": "Pamela Fatima Gusmao,Pamela Fatima Gusmao",
+      "profissionalLink": "https://app3.feegow.com/main/?P=Profissionais&I=4&Pers=1",
+      "valor": 1132.33,
+      "valorFormatado": "1.132,33",
+      "pagadorId": "2",
+      "profissionalId": "4"
+    },
+    {
+      "data": "03/03/2026",
+      "dataOrdem": "2026-03-03",
+      "formaPagamento": "Dinheiro",
+      "pagador": "Anna Luiza Rocha Rodrigues",
+      "pagadorLink": "https://app3.feegow.com/main/?P=caixa&I=270&Pers=1",
+      "profissional": "Luiz Henrique Rigatti",
+      "profissionalLink": "https://app3.feegow.com/main/?P=Profissionais&I=1&Pers=1",
+      "valor": 480,
+      "valorFormatado": "480,00",
+      "pagadorId": "270",
+      "profissionalId": "1"
+    },
+    {
+      "data": "04/03/2026",
+      "dataOrdem": "2026-03-04",
+      "formaPagamento": "Crédito",
+      "pagador": "Maikol Koch",
+      "pagadorLink": "https://app3.feegow.com/main/?P=sys_financialCurrentAccounts&I=20&Pers=1",
+      "profissional": "Luiz Henrique Rigatti",
+      "profissionalLink": "https://app3.feegow.com/main/?P=Profissionais&I=1&Pers=1",
+      "valor": 500,
+      "valorFormatado": "500,00",
+      "pagadorId": "20",
+      "profissionalId": "1"
+    },
+    {
+      "data": "04/03/2026",
+      "dataOrdem": "2026-03-04",
+      "formaPagamento": "Crédito",
+      "pagador": "Valmor José Telles Junior",
+      "pagadorLink": "https://app3.feegow.com/main/?P=sys_financialCurrentAccounts&I=20&Pers=1",
+      "profissional": "Pamela Fatima Gusmao",
+      "profissionalLink": "https://app3.feegow.com/main/?P=Profissionais&I=4&Pers=1",
+      "valor": 6400,
+      "valorFormatado": "6.400,00",
+      "pagadorId": "20",
+      "profissionalId": "4"
+    }
+  ]
+}

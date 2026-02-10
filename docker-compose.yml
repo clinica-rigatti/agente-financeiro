@@ -1,0 +1,44 @@
+services:
+  # Cliente OneDrive para sincronização
+  onedrive:
+    image: driveone/onedrive:edge
+    container_name: onedrive-sync
+    restart: unless-stopped
+    environment:
+      - ONEDRIVE_UID=1000
+      - ONEDRIVE_GID=1000
+      - ONEDRIVE_SINGLE_DIRECTORY=planilhas
+      - ONEDRIVE_RESYNC=1
+    volumes:
+      - ./onedrive:/onedrive/data
+      - onedrive-config:/onedrive/conf
+    healthcheck:
+      test: ["CMD", "test", "-d", "/onedrive/data/planilhas"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+
+  # Agente Financeiro
+  agente-financeiro:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: agente-financeiro
+    restart: unless-stopped
+    depends_on:
+      onedrive:
+        condition: service_healthy
+    environment:
+      - NODE_ENV=production
+      - TZ=America/Sao_Paulo
+    env_file:
+      - .env
+    volumes:
+      - ./onedrive:/app/onedrive
+      - ./logs:/app/logs
+    # Cron interno roda à meia-noite
+    # Manual: docker compose exec agente-financeiro npm start
+
+volumes:
+  onedrive-config:
