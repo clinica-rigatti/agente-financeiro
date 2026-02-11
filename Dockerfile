@@ -2,8 +2,9 @@ FROM node:20-alpine
 
 WORKDIR /app
 
-# Instala cron
-RUN apk add --no-cache dcron
+# Instala cron e timezone
+RUN apk add --no-cache dcron tzdata
+ENV TZ=America/Sao_Paulo
 
 # Copia package.json e instala dependências
 COPY package*.json ./
