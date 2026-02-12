@@ -224,12 +224,27 @@ export async function saveHistory(insertedRows, date) {
     totalPacientes: pacientes.length,
   });
 
+  // Detect OneDrive UID/GID from the planilhas directory (owned by OneDrive container)
+  let ownerUid, ownerGid;
+  try {
+    const planilhasStat = fs.statSync(path.join(ONEDRIVE_PATH, 'planilhas'));
+    ownerUid = planilhasStat.uid;
+    ownerGid = planilhasStat.gid;
+  } catch (e) { /* ignore */ }
+
+  // Match directory ownership to OneDrive user
+  if (ownerUid !== undefined) {
+    try { fs.chownSync(dirPath, ownerUid, ownerGid); } catch (e) { /* ignore */ }
+  }
+
   // Atomic write
   const tmpPath = filePath + '.tmp';
   fs.writeFileSync(tmpPath, JSON.stringify(history, null, 2), { encoding: 'utf-8', mode: 0o666 });
   fs.renameSync(tmpPath, filePath);
-  // Ensure OneDrive container can modify timestamp (different user)
-  try { fs.chmodSync(filePath, 0o666); } catch (e) { /* ignore */ }
+  // Ensure OneDrive container can modify timestamp (chown to OneDrive user)
+  if (ownerUid !== undefined) {
+    try { fs.chownSync(filePath, ownerUid, ownerGid); } catch (e) { /* ignore */ }
+  }
 
   log.info(`Histórico salvo: ${pacientes.length} pacientes para ${dateKey}`);
 }
