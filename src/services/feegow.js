@@ -535,6 +535,7 @@ export async function enrichTransactionWithItems(transaction) {
       nome,
       valor: item.valor / 100, // Invoice returns in cents
       quantidade: item.quantidade || 1,
+      desconto: (item.desconto || 0) / 100, // Invoice returns in cents
     });
   }
 
@@ -592,7 +593,7 @@ export function clearAppointmentsCache() {
 }
 
 /**
- * Fetches patient appointments from a given date onwards
+ * Fetches patient appointments in a ±7 day window around the given date
  * Uses GET /api/appoints/search endpoint with cache per patient
  * Retries up to 3 times on transient errors (409, 5xx, network)
  * @param {string|number} patientId - Patient ID
@@ -605,14 +606,27 @@ export async function fetchPatientAppointments(patientId, dateStr) {
     return appointmentsCache.get(cacheKey);
   }
 
-  // Convert date to DD-MM-YYYY (with dashes) for the API
-  let dataStart;
+  // Parse date to create ±7 day window
+  let dateObj;
   if (dateStr.includes('/')) {
-    dataStart = dateStr.replace(/\//g, '-');
+    const [d, m, y] = dateStr.split('/').map(Number);
+    dateObj = new Date(y, m - 1, d);
   } else {
-    const [y, m, d] = dateStr.split('-');
-    dataStart = `${d}-${m}-${y}`;
+    const [y, m, d] = dateStr.split('-').map(Number);
+    dateObj = new Date(y, m - 1, d);
   }
+
+  const startDate = new Date(dateObj);
+  startDate.setDate(startDate.getDate() - 7);
+  const endDate = new Date(dateObj);
+  endDate.setDate(endDate.getDate() + 7);
+
+  const fmt = (dt) => {
+    const dd = String(dt.getDate()).padStart(2, '0');
+    const mm = String(dt.getMonth() + 1).padStart(2, '0');
+    const yyyy = dt.getFullYear();
+    return `${dd}-${mm}-${yyyy}`;
+  };
 
   const MAX_RETRIES = 3;
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
@@ -620,8 +634,8 @@ export async function fetchPatientAppointments(patientId, dateStr) {
       const response = await api.get('/api/appoints/search', {
         params: {
           paciente_id: patientId,
-          data_start: dataStart,
-          data_end: dataStart,
+          data_start: fmt(startDate),
+          data_end: fmt(endDate),
         },
       });
 
@@ -652,20 +666,38 @@ export async function fetchPatientAppointments(patientId, dateStr) {
 
 /**
  * Checks if patient has an appointment on the exact processing date
- * Searches only for the exact date (data_start = data_end)
+ * Also detects online consultations from nearby appointments (notas or telemedicina flag)
  * @param {string|number} patientId - Patient ID
  * @param {string} processingDate - Date being processed (DD/MM/YYYY or YYYY-MM-DD)
- * @returns {Promise<{hasAppointmentToday: boolean, apiError: boolean}>}
+ * @returns {Promise<{hasAppointmentToday: boolean, isOnlineConsultation: boolean, apiError: boolean}>}
  */
 export async function checkAppointmentDate(patientId, processingDate) {
   const { appointments, apiError } = await fetchPatientAppointments(patientId, processingDate);
 
   if (apiError) {
-    return { hasAppointmentToday: false, apiError: true };
+    return { hasAppointmentToday: false, isOnlineConsultation: false, apiError: true };
   }
 
-  // data_start === data_end, so any result means appointment on that day
-  return { hasAppointmentToday: appointments.length > 0, apiError: false };
+  // Normalize processing date to DD-MM-YYYY for comparison
+  let procDateNorm;
+  if (processingDate.includes('/')) {
+    procDateNorm = processingDate.replace(/\//g, '-');
+  } else {
+    const [y, m, d] = processingDate.split('-');
+    procDateNorm = `${d}-${m}-${y}`;
+  }
+
+  const hasToday = appointments.some(apt => apt.data === procDateNorm);
+
+  // Check if any nearby appointment is an online consultation
+  // "Agendamento Online" = booking channel (AI agents), NOT an online consultation
+  // "Consulta ONLINE" in notes = actual online consultation
+  const isOnline = appointments.some(apt =>
+    apt.telemedicina === true ||
+    (apt.notas && apt.notas.toLowerCase().includes('consulta online'))
+  );
+
+  return { hasAppointmentToday: hasToday, isOnlineConsultation: isOnline, apiError: false };
 }
 
 /**

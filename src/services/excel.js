@@ -720,8 +720,13 @@ function calculatePaymentsTotal(row) {
 function groupTransactions(transactions) {
   const groups = new Map();
 
+  // Source quality priority: proposal > invoice > report-single > report-distributed
+  const SOURCE_PRIORITY = { 'proposal': 3, 'invoice': 2, 'report-single': 1, 'report-distributed': 0, 'payment-only': 0 };
+
   for (const mov of transactions) {
-    const key = `${mov.PacienteID}_${mov.Data}`;
+    // Group by patient + date + invoice (different invoices = different rows)
+    const invoice = mov.NumeroInvoice || mov.IDTransacao || 'unknown';
+    const key = `${mov.PacienteID}_${mov.Data}_${invoice}`;
 
     if (!groups.has(key)) {
       groups.set(key, {
@@ -730,19 +735,47 @@ function groupTransactions(transactions) {
         date: mov.Data,
         transactions: [],
         detailedItems: [],
+        fonteItens: '',
       });
     }
 
     const group = groups.get(key);
     group.transactions.push(mov);
 
-    // Add detailed items
+    // Add detailed items from best available source only
+    // When a group has multiple transactions (same invoice, different payments),
+    // use items from the highest quality source to avoid double counting
     if (mov.detailedItems) {
-      group.detailedItems.push(...mov.detailedItems);
+      const fonte = mov.fonteItens || '';
+      const currentPriority = SOURCE_PRIORITY[fonte] ?? 0;
+      const bestPriority = SOURCE_PRIORITY[group.fonteItens] ?? -1;
+
+      if (currentPriority > bestPriority) {
+        // Better source found — replace items entirely
+        group.detailedItems = [...mov.detailedItems];
+        group.fonteItens = fonte;
+      } else if (currentPriority === bestPriority) {
+        // Same quality source — accumulate items
+        group.detailedItems.push(...mov.detailedItems);
+      }
+      // Lower quality source: skip items (already have better data)
     }
   }
 
-  return Array.from(groups.values());
+  // Sort groups by date (chronological order)
+  const sorted = Array.from(groups.values()).sort((a, b) => {
+    const parseDate = (d) => {
+      if (!d) return 0;
+      if (d.includes('/')) {
+        const [dd, mm, yy] = d.split('/').map(Number);
+        return new Date(yy, mm - 1, dd).getTime();
+      }
+      return new Date(d).getTime();
+    };
+    return parseDate(a.date) - parseDate(b.date);
+  });
+
+  return sorted;
 }
 
 /**
@@ -760,7 +793,30 @@ async function buildRow(group, referenceDate) {
 
   // Process detailed items (procedures)
   let discountTotal = 0;
+  let hasPaymentOnly = false;
+  // IDs of procedures that are actually payments, not real procedures
+  const PAYMENT_ONLY_PROCEDURE_IDS = [
+    143, // "Pagamento Boleto Antigo (Não Fatura Comercial)"
+    156, // "Acordo Judicial"
+  ];
+
   for (const item of group.detailedItems) {
+    // Skip procedures that are actually payments for old treatments (only count as payment)
+    if (PAYMENT_ONLY_PROCEDURE_IDS.includes(item.procedimento_id)) {
+      classificationDetails.push({
+        tipo: 'procedimento',
+        procedimentoId: item.procedimento_id,
+        nome: item.nome,
+        valor: formatValue(item.valor),
+        quantidade: item.quantidade || 1,
+        desconto: item.desconto || 0,
+        colunaDestino: null,
+        colunaDestinoNome: 'PAGAMENTO_ANTIGO',
+        classificadoPor: 'payment-only',
+      });
+      continue;
+    }
+
     // Accumulate discounts (desconto is per unit, multiply by quantity)
     if (item.desconto && item.desconto > 0) {
       discountTotal += item.desconto * (item.quantidade || 1);
@@ -784,7 +840,7 @@ async function buildRow(group, referenceDate) {
 
     // Validate AVALIAÇÃO: check if appointment is for processing date or future
     if (column === COLUMNS.AVALIACAO) {
-      const { hasAppointmentToday, apiError } = await checkAppointmentDate(
+      const { hasAppointmentToday, isOnlineConsultation, apiError } = await checkAppointmentDate(
         group.transactions[0].PacienteID,
         referenceDate,
       );
@@ -792,6 +848,27 @@ async function buildRow(group, referenceDate) {
       if (apiError) {
         // API failed after retries — keep evaluation as normal (don't penalize patient)
         log.warn(`Avaliação do paciente ${group.patientName}: API de agendamentos falhou, mantendo como avaliação`);
+      } else if (!hasAppointmentToday && isOnlineConsultation) {
+        // Online consultation — appointment is on a different date but notes/telemedicina indicate online
+        log.debug(`Avaliação do paciente ${group.patientName}: consulta online detectada (agendamento com notas "online" ou telemedicina)`);
+        // Redirect to ONLINE column instead of AVALIACAO
+        const qty = item.quantidade || 1;
+        const fonteItens = group.fonteItens || group.transactions[0]?.fonteItens || '';
+        const isUnitPrice = fonteItens === 'invoice';
+        const itemTotal = isUnitPrice ? formatValue(item.valor) * qty : formatValue(item.valor);
+        procedureValues[COLUMNS.ONLINE] = (procedureValues[COLUMNS.ONLINE] || 0) + itemTotal;
+        classificationDetails.push({
+          tipo: 'procedimento',
+          procedimentoId: item.procedimento_id,
+          nome: item.nome,
+          valor: itemTotal,
+          quantidade: qty,
+          desconto: item.desconto || 0,
+          colunaDestino: COLUMNS.ONLINE,
+          colunaDestinoNome: 'ONLINE',
+          classificadoPor: 'agendamento-online',
+        });
+        continue;
       } else if (!hasAppointmentToday) {
         // Signal payment (sinal) — no appointment on this date, skip procedure column
         log.debug(`Avaliação do paciente ${group.patientName}: sinal antecipado (sem agendamento no dia)`);
@@ -814,13 +891,18 @@ async function buildRow(group, referenceDate) {
       }
     }
 
-    procedureValues[column] = (procedureValues[column] || 0) + formatValue(item.valor);
+    const qty = item.quantidade || 1;
+    // Invoice items have unit price (multiply by qty); proposal items already have total price
+    const fonteItens = group.fonteItens || group.transactions[0]?.fonteItens || '';
+    const isUnitPrice = fonteItens === 'invoice';
+    const itemTotal = isUnitPrice ? formatValue(item.valor) * qty : formatValue(item.valor);
+    procedureValues[column] = (procedureValues[column] || 0) + itemTotal;
     classificationDetails.push({
       tipo: 'procedimento',
       procedimentoId: item.procedimento_id,
       nome: item.nome,
-      valor: formatValue(item.valor),
-      quantidade: item.quantidade || 1,
+      valor: itemTotal,
+      quantidade: qty,
       desconto: item.desconto || 0,
       colunaDestino: column,
       colunaDestinoNome: COLUMN_NAMES[column] || column,
@@ -828,9 +910,22 @@ async function buildRow(group, referenceDate) {
     });
   }
 
+  // Fallback: calculate implied discount for invoice-sourced items when no explicit discount found
+  if (discountTotal === 0) {
+    const fonteItens = group.fonteItens || group.transactions[0]?.fonteItens || '';
+    if (fonteItens === 'invoice') {
+      const procTotal = Object.values(procedureValues).reduce((sum, v) => sum + v, 0);
+      const payTotal = group.transactions.reduce((sum, mov) => sum + formatValue(mov.Value), 0);
+
+      if (procTotal > payTotal && payTotal > 0) {
+        discountTotal = Math.round((procTotal - payTotal) * 100) / 100;
+        log.debug(`Desconto implícito para ${group.patientName}: R$ ${discountTotal.toFixed(2)} (itens: R$ ${procTotal.toFixed(2)}, pagamento: R$ ${payTotal.toFixed(2)})`);
+      }
+    }
+  }
+
   // Process payment methods
   const notes = [];
-  let hasPaymentOnly = false;
 
   for (const mov of group.transactions) {
     const paymentColumn = identifyPaymentColumn(mov);
