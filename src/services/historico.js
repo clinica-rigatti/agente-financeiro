@@ -226,8 +226,10 @@ export async function saveHistory(insertedRows, date) {
 
   // Atomic write
   const tmpPath = filePath + '.tmp';
-  fs.writeFileSync(tmpPath, JSON.stringify(history, null, 2), 'utf-8');
+  fs.writeFileSync(tmpPath, JSON.stringify(history, null, 2), { encoding: 'utf-8', mode: 0o666 });
   fs.renameSync(tmpPath, filePath);
+  // Ensure OneDrive container can modify timestamp (different user)
+  try { fs.chmodSync(filePath, 0o666); } catch (e) { /* ignore */ }
 
   log.info(`Histórico salvo: ${pacientes.length} pacientes para ${dateKey}`);
 }
