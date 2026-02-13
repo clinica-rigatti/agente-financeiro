@@ -925,27 +925,12 @@ async function buildRow(group, referenceDate) {
   }
 
   // Process payment methods
-  const notes = [];
-
   for (const mov of group.transactions) {
     const paymentColumn = identifyPaymentColumn(mov);
     paymentValues[paymentColumn] = (paymentValues[paymentColumn] || 0) + formatValue(mov.Value);
 
     if (mov.paymentOnly) {
       hasPaymentOnly = true;
-    }
-
-    // Collect card information
-    if (mov.Bandeira) {
-      const cardInfo = `${mov.Bandeira}${mov.Parcelas ? ` ${mov.Parcelas}x` : ''}`;
-      if (!notes.includes(cardInfo)) {
-        notes.push(cardInfo);
-      }
-    }
-
-    // Add description if available
-    if (mov.Descricao && mov.Descricao.trim() && mov.Descricao !== ',') {
-      notes.push(mov.Descricao.trim());
     }
   }
 
@@ -976,10 +961,7 @@ async function buildRow(group, referenceDate) {
   row[COLUMNS.DATA] = dateObj;
   row[COLUMNS.NOME] = (group.patientName || '').toUpperCase();
 
-  // Notes/observations in VENDA column
-  if (notes.length > 0) {
-    row[COLUMNS.VENDA] = notes.join(' | ');
-  }
+  // Column C (VENDA) is manually filled by the finance team — do not write to it
 
   // paymentOnly observation goes to dedicated column AG
   if (hasPaymentOnly) {
