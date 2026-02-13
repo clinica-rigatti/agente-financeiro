@@ -403,6 +403,18 @@ async function findMatchingProposal(transaction, proposals) {
 export async function enrichTransactionWithItems(transaction) {
   const { NumeroInvoice, NomeProcedimento } = transaction;
 
+  // Boleto payments are always payment-only
+  // The treatment was already counted on the appointment date; boleto is just deferred payment
+  if (transaction.FormaPagamentoID === 4) {
+    log.debug(`Transaction ${NumeroInvoice || transaction.IDTransacao}: boleto payment → payment only`);
+    return {
+      ...transaction,
+      paymentOnly: true,
+      fonteItens: 'payment-only',
+      detailedItems: [],
+    };
+  }
+
   // Check if this is a payment for an old proposal (installment)
   // If the proposal date is more than 30 days before the transaction, it's payment-only
   if (NumeroInvoice) {

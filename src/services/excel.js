@@ -762,6 +762,50 @@ function groupTransactions(transactions) {
     }
   }
 
+  // Consolidate fee-only groups (juros) into the main group for same patient+date
+  // Interest charges come as separate transactions/invoices but should be in the same row
+  const FEE_PATTERNS = ['juros'];
+
+  const patientDateMap = new Map();
+  for (const [key, group] of groups) {
+    const pdKey = `${group.patientId}_${group.date}`;
+    if (!patientDateMap.has(pdKey)) patientDateMap.set(pdKey, []);
+    patientDateMap.get(pdKey).push(key);
+  }
+
+  for (const [pdKey, keys] of patientDateMap) {
+    if (keys.length <= 1) continue;
+
+    const mainKeys = [];
+    const feeKeys = [];
+
+    for (const key of keys) {
+      const group = groups.get(key);
+      const isFeeOnly = group.transactions.every(mov => {
+        const name = (mov.NomeProcedimento || '').toLowerCase();
+        return FEE_PATTERNS.some(pattern => name.includes(pattern));
+      });
+
+      if (isFeeOnly) {
+        feeKeys.push(key);
+      } else {
+        mainKeys.push(key);
+      }
+    }
+
+    // Merge fee-only groups into the first main group
+    if (feeKeys.length > 0 && mainKeys.length > 0) {
+      const targetGroup = groups.get(mainKeys[0]);
+      for (const feeKey of feeKeys) {
+        const feeGroup = groups.get(feeKey);
+        targetGroup.transactions.push(...feeGroup.transactions);
+        targetGroup.detailedItems.push(...feeGroup.detailedItems);
+        groups.delete(feeKey);
+        log.debug(`Juros consolidado: ${feeGroup.patientName} (${feeGroup.date}) → mesma linha`);
+      }
+    }
+  }
+
   // Sort groups by date (chronological order)
   const sorted = Array.from(groups.values()).sort((a, b) => {
     const parseDate = (d) => {
@@ -838,11 +882,12 @@ async function buildRow(group, referenceDate) {
       continue;
     }
 
-    // Validate AVALIAÇÃO: check if appointment is for processing date or future
+    // Validate AVALIAÇÃO: check if appointment is for the actual transaction date
     if (column === COLUMNS.AVALIACAO) {
+      const transactionDate = group.date || referenceDate;
       const { hasAppointmentToday, isOnlineConsultation, apiError } = await checkAppointmentDate(
         group.transactions[0].PacienteID,
-        referenceDate,
+        transactionDate,
       );
 
       if (apiError) {
