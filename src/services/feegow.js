@@ -427,13 +427,23 @@ export async function enrichTransactionWithItems(transaction) {
       const daysDiff = Math.abs(transactionMs - proposalMs) / (1000 * 60 * 60 * 24);
 
       if (daysDiff > 30) {
-        log.debug(`Invoice ${NumeroInvoice}: proposal ${proposalDate} is ${Math.round(daysDiff)} days before transaction ${transaction.Data} → payment only`);
-        return {
-          ...transaction,
-          paymentOnly: true,
-          fonteItens: 'payment-only',
-          detailedItems: [],
-        };
+        // Before marking as paymentOnly, check if patient has an appointment on this date
+        // If they do, it's a real visit (invoice was just created in advance)
+        const { hasAppointmentToday, apiError } = await checkAppointmentDate(
+          transaction.PacienteID,
+          transaction.Data,
+        );
+
+        if (!hasAppointmentToday && !apiError) {
+          log.debug(`Invoice ${NumeroInvoice}: proposal ${proposalDate} is ${Math.round(daysDiff)} days before transaction ${transaction.Data}, no appointment → payment only`);
+          return {
+            ...transaction,
+            paymentOnly: true,
+            fonteItens: 'payment-only',
+            detailedItems: [],
+          };
+        }
+        log.debug(`Invoice ${NumeroInvoice}: proposal ${proposalDate} is ${Math.round(daysDiff)} days old, but patient has appointment on ${transaction.Data} → processing normally`);
       } else {
         log.debug(`Invoice ${NumeroInvoice}: proposal ${proposalDate} is ${Math.round(daysDiff)} days before transaction ${transaction.Data} → recent, processing normally`);
       }

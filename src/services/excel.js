@@ -724,15 +724,15 @@ function groupTransactions(transactions) {
   const SOURCE_PRIORITY = { 'proposal': 3, 'invoice': 2, 'report-single': 1, 'report-distributed': 0, 'payment-only': 0 };
 
   for (const mov of transactions) {
-    // Group by patient + date + invoice (different invoices = different rows)
-    const invoice = mov.NumeroInvoice || mov.IDTransacao || 'unknown';
-    const key = `${mov.PacienteID}_${mov.Data}_${invoice}`;
+    // Group by patient + date + transaction (one row per payment)
+    const key = `${mov.PacienteID}_${mov.Data}_${mov.IDTransacao}`;
 
     if (!groups.has(key)) {
       groups.set(key, {
         patientId: mov.PacienteID,
         patientName: mov.NomePaciente,
         date: mov.Data,
+        invoice: mov.NumeroInvoice,
         transactions: [],
         detailedItems: [],
         fonteItens: '',
@@ -742,23 +742,52 @@ function groupTransactions(transactions) {
     const group = groups.get(key);
     group.transactions.push(mov);
 
-    // Add detailed items from best available source only
-    // When a group has multiple transactions (same invoice, different payments),
-    // use items from the highest quality source to avoid double counting
+    // Add detailed items from the transaction
     if (mov.detailedItems) {
       const fonte = mov.fonteItens || '';
       const currentPriority = SOURCE_PRIORITY[fonte] ?? 0;
       const bestPriority = SOURCE_PRIORITY[group.fonteItens] ?? -1;
 
       if (currentPriority > bestPriority) {
-        // Better source found — replace items entirely
         group.detailedItems = [...mov.detailedItems];
         group.fonteItens = fonte;
       } else if (currentPriority === bestPriority) {
-        // Same quality source — accumulate items
         group.detailedItems.push(...mov.detailedItems);
       }
-      // Lower quality source: skip items (already have better data)
+    }
+  }
+
+  // Deduplicate procedures for transactions sharing the same invoice
+  // Only the best-source group keeps the detailed items; others become payment-only rows
+  const invoiceGroups = new Map(); // invoiceNumber → [groupKeys]
+  for (const [key, group] of groups) {
+    const inv = group.invoice;
+    if (!inv) continue;
+    if (!invoiceGroups.has(inv)) invoiceGroups.set(inv, []);
+    invoiceGroups.get(inv).push(key);
+  }
+
+  for (const [inv, keys] of invoiceGroups) {
+    if (keys.length <= 1) continue;
+
+    // Find the group with the best source for this invoice
+    let bestKey = keys[0];
+    let bestPriority = SOURCE_PRIORITY[groups.get(bestKey).fonteItens] ?? 0;
+    for (const key of keys.slice(1)) {
+      const priority = SOURCE_PRIORITY[groups.get(key).fonteItens] ?? 0;
+      if (priority > bestPriority) {
+        bestPriority = priority;
+        bestKey = key;
+      }
+    }
+
+    // Clear items on all groups except the best one to avoid double counting
+    for (const key of keys) {
+      if (key !== bestKey) {
+        groups.get(key).detailedItems = [];
+        groups.get(key).fonteItens = '';
+        log.debug(`Invoice ${inv}: procedimentos mantidos em Tx ${bestKey.split('_')[2]}, pagamento avulso em Tx ${key.split('_')[2]}`);
+      }
     }
   }
 
@@ -882,8 +911,11 @@ async function buildRow(group, referenceDate) {
       continue;
     }
 
-    // Validate AVALIAÇÃO: check if appointment is for the actual transaction date
-    if (column === COLUMNS.AVALIACAO) {
+    // Validate consultations: check if appointment exists on the actual transaction date
+    // Applies to all consultation-type columns (AVALIACAO, ONLINE, NUTRIS, DR_RIGATTI)
+    // If no appointment → it's a "sinal antecipado" (advance payment) → skip procedure, only count payment
+    const CONSULTATION_COLUMNS = [COLUMNS.AVALIACAO, COLUMNS.ONLINE, COLUMNS.NUTRIS, COLUMNS.DR_RIGATTI];
+    if (CONSULTATION_COLUMNS.includes(column)) {
       const transactionDate = group.date || referenceDate;
       const { hasAppointmentToday, isOnlineConsultation, apiError } = await checkAppointmentDate(
         group.transactions[0].PacienteID,
@@ -891,12 +923,12 @@ async function buildRow(group, referenceDate) {
       );
 
       if (apiError) {
-        // API failed after retries — keep evaluation as normal (don't penalize patient)
-        log.warn(`Avaliação do paciente ${group.patientName}: API de agendamentos falhou, mantendo como avaliação`);
-      } else if (!hasAppointmentToday && isOnlineConsultation) {
+        // API failed after retries — keep as normal (don't penalize patient)
+        log.warn(`Consulta do paciente ${group.patientName}: API de agendamentos falhou, mantendo procedimento`);
+      } else if (!hasAppointmentToday && isOnlineConsultation && column === COLUMNS.AVALIACAO) {
         // Online consultation — appointment is on a different date but notes/telemedicina indicate online
+        // Only redirect AVALIACAO → ONLINE (other columns already have the right classification)
         log.debug(`Avaliação do paciente ${group.patientName}: consulta online detectada (agendamento com notas "online" ou telemedicina)`);
-        // Redirect to ONLINE column instead of AVALIACAO
         const qty = item.quantidade || 1;
         const fonteItens = group.fonteItens || group.transactions[0]?.fonteItens || '';
         const isUnitPrice = fonteItens === 'invoice';
@@ -916,7 +948,7 @@ async function buildRow(group, referenceDate) {
         continue;
       } else if (!hasAppointmentToday) {
         // Signal payment (sinal) — no appointment on this date, skip procedure column
-        log.debug(`Avaliação do paciente ${group.patientName}: sinal antecipado (sem agendamento no dia)`);
+        log.debug(`Consulta do paciente ${group.patientName}: sinal antecipado (sem agendamento no dia) — ${item.nome}`);
         classificationDetails.push({
           tipo: 'procedimento',
           procedimentoId: item.procedimento_id,
