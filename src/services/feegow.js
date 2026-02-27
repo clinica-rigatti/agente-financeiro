@@ -415,8 +415,8 @@ export async function enrichTransactionWithItems(transaction) {
     };
   }
 
-  // Check if this is a payment for an old proposal (installment)
-  // If the proposal date is more than 30 days before the transaction, it's payment-only
+  // Check if this is a deferred payment for a proposal from another date
+  // If proposal date differs from transaction date AND patient has no appointment → payment only
   if (NumeroInvoice) {
     const proposalDate = await fetchInvoiceProposalDate(NumeroInvoice);
     if (proposalDate && proposalDate !== transaction.Data) {
@@ -424,29 +424,24 @@ export async function enrichTransactionWithItems(transaction) {
       const [tDay, tMonth, tYear] = transaction.Data.split('/').map(Number);
       const proposalMs = new Date(pYear, pMonth - 1, pDay).getTime();
       const transactionMs = new Date(tYear, tMonth - 1, tDay).getTime();
-      const daysDiff = Math.abs(transactionMs - proposalMs) / (1000 * 60 * 60 * 24);
+      const daysDiff = Math.round(Math.abs(transactionMs - proposalMs) / (1000 * 60 * 60 * 24));
 
-      if (daysDiff > 30) {
-        // Before marking as paymentOnly, check if patient has an appointment on this date
-        // If they do, it's a real visit (invoice was just created in advance)
-        const { hasAppointmentToday, apiError } = await checkAppointmentDate(
-          transaction.PacienteID,
-          transaction.Data,
-        );
+      const { hasAppointmentToday, apiError } = await checkAppointmentDate(
+        transaction.PacienteID,
+        transaction.Data,
+        { consultationOnly: true },
+      );
 
-        if (!hasAppointmentToday && !apiError) {
-          log.debug(`Invoice ${NumeroInvoice}: proposal ${proposalDate} is ${Math.round(daysDiff)} days before transaction ${transaction.Data}, no appointment → payment only`);
-          return {
-            ...transaction,
-            paymentOnly: true,
-            fonteItens: 'payment-only',
-            detailedItems: [],
-          };
-        }
-        log.debug(`Invoice ${NumeroInvoice}: proposal ${proposalDate} is ${Math.round(daysDiff)} days old, but patient has appointment on ${transaction.Data} → processing normally`);
-      } else {
-        log.debug(`Invoice ${NumeroInvoice}: proposal ${proposalDate} is ${Math.round(daysDiff)} days before transaction ${transaction.Data} → recent, processing normally`);
+      if (!hasAppointmentToday && !apiError) {
+        log.debug(`Invoice ${NumeroInvoice}: proposal ${proposalDate} (${daysDiff}d ago), no consultation appointment on ${transaction.Data} → payment only`);
+        return {
+          ...transaction,
+          paymentOnly: true,
+          fonteItens: 'payment-only',
+          detailedItems: [],
+        };
       }
+      log.debug(`Invoice ${NumeroInvoice}: proposal ${proposalDate} (${daysDiff}d ago), but patient has consultation on ${transaction.Data} → processing normally`);
     }
   }
 
@@ -686,14 +681,21 @@ export async function fetchPatientAppointments(patientId, dateStr) {
   }
 }
 
+// Appointment groups/procedures that do NOT count as real consultations
+// When checking deferred payments, these are ignored (patient is just there for application/infusion)
+const NON_CONSULTATION_GROUPS = new Set([2, 4]); // 2=APLICACOES, 4=SORO_DR
+const NON_CONSULTATION_OVERRIDES = new Set([109, 110, 111, 112, 18, 22, 24]); // NUTRIS procedures
+
 /**
  * Checks if patient has an appointment on the exact processing date
  * Also detects online consultations from nearby appointments (notas or telemedicina flag)
  * @param {string|number} patientId - Patient ID
  * @param {string} processingDate - Date being processed (DD/MM/YYYY or YYYY-MM-DD)
+ * @param {Object} [options] - Optional filters
+ * @param {boolean} [options.consultationOnly] - If true, ignore non-consultation appointments (aplicação, soro, nutri)
  * @returns {Promise<{hasAppointmentToday: boolean, isOnlineConsultation: boolean, apiError: boolean}>}
  */
-export async function checkAppointmentDate(patientId, processingDate) {
+export async function checkAppointmentDate(patientId, processingDate, options = {}) {
   const { appointments, apiError } = await fetchPatientAppointments(patientId, processingDate);
 
   if (apiError) {
@@ -709,7 +711,23 @@ export async function checkAppointmentDate(patientId, processingDate) {
     procDateNorm = `${d}-${m}-${y}`;
   }
 
-  const hasToday = appointments.some(apt => apt.data === procDateNorm);
+  let todayAppointments = appointments.filter(apt => apt.data === procDateNorm);
+
+  // When checking deferred payments, ignore non-consultation appointments
+  if (options.consultationOnly && todayAppointments.length > 0) {
+    const filtered = todayAppointments.filter(apt => {
+      if (NON_CONSULTATION_GROUPS.has(apt.grupo_procedimento_id)) return false;
+      if (NON_CONSULTATION_OVERRIDES.has(apt.procedimento_id)) return false;
+      return true;
+    });
+    if (filtered.length < todayAppointments.length) {
+      const ignored = todayAppointments.length - filtered.length;
+      log.debug(`Paciente ${patientId}: ${ignored} agendamento(s) ignorado(s) (aplicação/soro/nutri) no dia ${procDateNorm}`);
+    }
+    todayAppointments = filtered;
+  }
+
+  const hasToday = todayAppointments.length > 0;
 
   // Check if any nearby appointment is an online consultation
   // "Agendamento Online" = booking channel (AI agents), NOT an online consultation
