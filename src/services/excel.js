@@ -835,7 +835,7 @@ function groupTransactions(transactions) {
     }
   }
 
-  // Sort groups by date (chronological order)
+  // Sort groups by date, then procedures before payment-only rows
   const sorted = Array.from(groups.values()).sort((a, b) => {
     const parseDate = (d) => {
       if (!d) return 0;
@@ -845,7 +845,13 @@ function groupTransactions(transactions) {
       }
       return new Date(d).getTime();
     };
-    return parseDate(a.date) - parseDate(b.date);
+    const dateDiff = parseDate(a.date) - parseDate(b.date);
+    if (dateDiff !== 0) return dateDiff;
+
+    // Same date: rows with procedures come before payment-only rows
+    const aHasItems = a.detailedItems.length > 0 ? 0 : 1;
+    const bHasItems = b.detailedItems.length > 0 ? 0 : 1;
+    return aHasItems - bHasItems;
   });
 
   return sorted;
