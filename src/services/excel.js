@@ -2,7 +2,7 @@ import ExcelJS from 'exceljs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { createLogger, logTable } from './logger.js';
-import { fetchGroupMapping, checkAppointmentDate } from './feegow.js';
+import { fetchGroupMapping, checkAppointmentDate, fetchPatientCPF } from './feegow.js';
 import { saveHistory } from './historico.js';
 
 const log = createLogger('Excel');
@@ -83,6 +83,8 @@ function getDefaultFill(column) {
   // Q-AF: blue
   const blueColumns = ['Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z', 'AA', 'AB', 'AC', 'AD', 'AE', 'AF'];
   if (blueColumns.includes(column)) return FILL_BLUE;
+  // AI: CPF — yellow background
+  if (column === 'AI') return FILL_YELLOW;
   return null;
 }
 
@@ -137,6 +139,9 @@ const COLUMNS = {
   ESTORNO: 'AD',       // ESTORNO
   NP_ABERTA: 'AE',     // NP ABERTA
   BOLETO_2: 'AF',      // BOLETO
+
+  // Patient info
+  CPF: 'AI',            // CPF do paciente
 };
 
 // Reverse mapping: column letter → readable name (for history file)
@@ -511,7 +516,7 @@ export async function updateSpreadsheet(transactions, date) {
     });
 
     // Column type classification
-    const textColumns = [COLUMNS.NOME, COLUMNS.VENDA, COLUMNS.OBSERVACAO];
+    const textColumns = [COLUMNS.NOME, COLUMNS.VENDA, COLUMNS.OBSERVACAO, COLUMNS.CPF];
 
     // Fill cells with data
     for (const [column, value] of Object.entries(rowData)) {
@@ -536,7 +541,11 @@ export async function updateSpreadsheet(transactions, date) {
       cell.font = CELL_FONT;
       cell.border = CELL_BORDER;
 
-      if (value !== 0) {
+      // CPF always uses default fill (not pending validation red)
+      if (column === COLUMNS.CPF) {
+        const defFill = getDefaultFill(column);
+        if (defFill) cell.fill = defFill;
+      } else if (value !== 0) {
         cell.fill = PENDING_VALIDATION_COLOR;
       } else {
         const defFill = getDefaultFill(column);
@@ -624,7 +633,7 @@ export async function updateSpreadsheetCustom(workbook, sheetName, transactions,
     lastRow++;
     const { rowData, classificationDetails } = await buildRow(group, date);
 
-    const textColumns = [COLUMNS.NOME, COLUMNS.VENDA, COLUMNS.OBSERVACAO];
+    const textColumns = [COLUMNS.NOME, COLUMNS.VENDA, COLUMNS.OBSERVACAO, COLUMNS.CPF];
 
     for (const [column, value] of Object.entries(rowData)) {
       const cell = worksheet.getCell(`${column}${lastRow}`);
@@ -643,7 +652,11 @@ export async function updateSpreadsheetCustom(workbook, sheetName, transactions,
       cell.font = CELL_FONT;
       cell.border = CELL_BORDER;
 
-      if (value !== 0) {
+      // CPF always uses default fill (not pending validation red)
+      if (column === COLUMNS.CPF) {
+        const defFill = getDefaultFill(column);
+        if (defFill) cell.fill = defFill;
+      } else if (value !== 0) {
         cell.fill = PENDING_VALIDATION_COLOR;
       } else {
         const defFill = getDefaultFill(column);
@@ -1044,6 +1057,13 @@ async function buildRow(group, referenceDate) {
   row[COLUMNS.DATA] = dateObj;
   row[COLUMNS.NOME] = (group.patientName || '').toUpperCase();
 
+  // Fetch patient CPF
+  const patientId = group.patientId || group.transactions[0]?.PacienteID;
+  if (patientId) {
+    const cpf = await fetchPatientCPF(patientId);
+    if (cpf) row[COLUMNS.CPF] = cpf;
+  }
+
   // Column C (VENDA) is manually filled by the finance team — do not write to it
 
   // paymentOnly observation goes to dedicated column AG
@@ -1076,8 +1096,8 @@ async function buildRow(group, referenceDate) {
   }
 
   // Fill explicit zeros in all numeric columns not yet set
-  // Excludes: DATA (A), NOME (B), VENDA (C), Y, OBSERVACAO (AG), AH — manually filled
-  const manualColumns = new Set([COLUMNS.DATA, COLUMNS.NOME, COLUMNS.VENDA, 'Y', COLUMNS.OBSERVACAO, 'AH']);
+  // Excludes: DATA (A), NOME (B), VENDA (C), Y, OBSERVACAO (AG), AH, CPF (AI) — manually filled or text
+  const manualColumns = new Set([COLUMNS.DATA, COLUMNS.NOME, COLUMNS.VENDA, 'Y', COLUMNS.OBSERVACAO, 'AH', COLUMNS.CPF]);
   for (const col of Object.values(COLUMNS)) {
     if (!manualColumns.has(col) && !(col in row)) {
       row[col] = 0;

@@ -67,7 +67,7 @@ export async function fetchTransactions(startDate, endDate, options = {}) {
  */
 export async function fetchPatient(patientId) {
   try {
-    const response = await api.get('/api/patient/get', {
+    const response = await api.get('/api/patient/search', {
       params: { paciente_id: patientId }
     });
 
@@ -77,6 +77,23 @@ export async function fetchPatient(patientId) {
     log.warn(`Não foi possível buscar paciente ${patientId}`, { erro: error.message });
     return null;
   }
+}
+
+const cpfCache = new Map();
+
+/**
+ * Fetches patient CPF with cache
+ * @param {string|number} patientId - Patient ID
+ * @returns {Promise<string>} CPF string or empty
+ */
+export async function fetchPatientCPF(patientId) {
+  const key = String(patientId);
+  if (cpfCache.has(key)) return cpfCache.get(key);
+
+  const patient = await fetchPatient(patientId);
+  const cpf = patient?.documentos?.cpf || '';
+  cpfCache.set(key, cpf);
+  return cpf;
 }
 
 /**
