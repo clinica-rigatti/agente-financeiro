@@ -1,8 +1,5 @@
 import 'dotenv/config';
 import { createServer } from 'http';
-import dayjs from 'dayjs';
-import { fetchDetailedTransactions, isoToFeegow } from './services/feegow.js';
-import { updateSpreadsheet } from './services/excel.js';
 import { createLogger, logSeparator } from './services/logger.js';
 
 const log = createLogger('Server');
@@ -24,6 +21,11 @@ async function executarBoletos() {
   const startTime = Date.now();
 
   try {
+    // Lazy load: só carrega módulos pesados quando o endpoint é chamado
+    const dayjs = (await import('dayjs')).default;
+    const { fetchDetailedTransactions, isoToFeegow } = await import('./services/feegow.js');
+    const { updateSpreadsheet } = await import('./services/excel.js');
+
     logSeparator('EXECUÇÃO BOLETOS (MANUAL)');
 
     const referenceDate = dayjs().subtract(1, 'day');
