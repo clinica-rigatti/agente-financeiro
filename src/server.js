@@ -10,8 +10,7 @@ const PORT = process.env.API_PORT || 3100;
 const TOKEN = process.env.API_TOKEN;
 
 if (!TOKEN) {
-  log.error('API_TOKEN não configurado no .env — servidor não iniciará');
-  process.exit(1);
+  log.warn('API_TOKEN não configurado no .env — endpoint /executar-boletos ficará desabilitado');
 }
 
 let running = false;
@@ -98,6 +97,11 @@ const server = createServer(async (req, res) => {
   }
 
   // Auth check
+  if (!TOKEN) {
+    res.writeHead(503, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ success: false, message: 'Servidor sem API_TOKEN configurado' }));
+    return;
+  }
   const auth = req.headers.authorization;
   if (!auth || auth !== `Bearer ${TOKEN}`) {
     res.writeHead(401, { 'Content-Type': 'application/json' });
