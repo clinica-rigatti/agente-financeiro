@@ -69,11 +69,20 @@ async function executarBoletos() {
   }
 }
 
+const ALLOWED_ORIGINS = [
+  'https://maria.clinicarigatti.com.br',
+  'https://rigatti.tech',
+];
+
 const server = createServer(async (req, res) => {
-  // CORS headers for Vercel frontend
-  res.setHeader('Access-Control-Allow-Origin', '*');
+  // CORS: only allow specific origins
+  const origin = req.headers.origin;
+  if (origin && ALLOWED_ORIGINS.some(o => origin === o || origin.endsWith('.' + o.replace('https://', '')))) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+  }
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type');
+  res.setHeader('Vary', 'Origin');
 
   if (req.method === 'OPTIONS') {
     res.writeHead(204);
