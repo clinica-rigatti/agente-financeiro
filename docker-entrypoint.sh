@@ -17,8 +17,7 @@ echo ""
 crond -b -l 2
 
 echo "Cron iniciado. Próxima execução: meia-noite"
-echo "Para executar manualmente: docker compose exec agente-financeiro npm start"
 echo ""
 
-# Keep container running
-tail -f /app/logs/cron.log 2>/dev/null || tail -f /dev/null
+# Start HTTP server (keeps container running + accepts manual triggers)
+exec node src/server.js

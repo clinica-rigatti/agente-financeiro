@@ -340,6 +340,79 @@ function formatValue(value) {
  * @param {string} date - Reference date (YYYY-MM-DD or DD/MM/YYYY)
  * @returns {ExcelJS.Worksheet} The newly created worksheet
  */
+/**
+ * Ensures all essential formulas exist in the sheet.
+ * Copies from template if present, otherwise uses known formula patterns.
+ */
+function ensureFormulas(sheet, template) {
+  // Row 5: SUM columns (D, E, G-Z, AD-AF) — these are the column totals
+  const sumCols = 'D E G H I J K L M N O P Q R S T U V W X Y Z AD AE AF'.split(' ');
+  let missing = 0;
+
+  for (const col of sumCols) {
+    const cell = sheet.getCell(`${col}5`);
+    if (!cell.formula) {
+      // Try to get range from template
+      const tmplCell = template.getCell(`${col}5`);
+      const tmplFormula = tmplCell.formula;
+      if (tmplFormula) {
+        cell.value = { formula: tmplFormula };
+      } else {
+        // Default: SUM(COL8:COL500) — generous range
+        cell.value = { formula: `SUM(${col}8:${col}500)` };
+      }
+      // Preserve style from template
+      if (tmplCell.style) {
+        cell.style = JSON.parse(JSON.stringify(tmplCell.style));
+      }
+      missing++;
+    }
+  }
+
+  // Row 6: F6 discount formula
+  if (!sheet.getCell('F6').formula) {
+    const tmplF6 = template.getCell('F6');
+    sheet.getCell('F6').value = { formula: tmplF6.formula || 'SUM(F8:F500)' };
+    if (tmplF6.style) sheet.getCell('F6').style = JSON.parse(JSON.stringify(tmplF6.style));
+    missing++;
+  }
+
+  // Row 2: Summary formulas
+  const row2Formulas = {
+    D2: 'SUM(D5+E5)',
+    P2: 'SUM(D5+G5+H5+I5+J5+K5+L5+M5+N5+O5)',
+    Q2: 'X2-AA5-AB5-AC5-AD5',
+    X2: 'SUM(Q5:Y5)',
+  };
+  for (const [ref, fallback] of Object.entries(row2Formulas)) {
+    const cell = sheet.getCell(ref);
+    if (!cell.formula) {
+      const tmplCell = template.getCell(ref);
+      cell.value = { formula: tmplCell.formula || fallback };
+      if (tmplCell.style) cell.style = JSON.parse(JSON.stringify(tmplCell.style));
+      missing++;
+    }
+  }
+
+  // Row 3: O3 and P3
+  const row3Formulas = { O3: 'P2-P3', P3: 'D5+E5' };
+  for (const [ref, fallback] of Object.entries(row3Formulas)) {
+    const cell = sheet.getCell(ref);
+    if (!cell.formula) {
+      const tmplCell = template.getCell(ref);
+      cell.value = { formula: tmplCell.formula || fallback };
+      if (tmplCell.style) cell.style = JSON.parse(JSON.stringify(tmplCell.style));
+      missing++;
+    }
+  }
+
+  if (missing > 0) {
+    log.warn(`${missing} fórmula(s) ausente(s) foram recriadas na nova aba`);
+  } else {
+    log.info('Todas as fórmulas copiadas corretamente do template');
+  }
+}
+
 function createSheetFromTemplate(workbook, sheetName, date) {
   // Find the most recent existing month sheet as template
   const existingSheets = workbook.worksheets.filter(ws => {
@@ -383,10 +456,25 @@ function createSheetFromTemplate(workbook, sheetName, date) {
       if (srcCell.isMerged && srcCell.master !== srcCell) continue;
 
       // Copy formula or value
-      if (srcCell.formula) {
-        dstCell.value = { formula: srcCell.formula };
-      } else if (srcCell.value !== null && srcCell.value !== undefined) {
-        dstCell.value = srcCell.value;
+      const formula = srcCell.formula;
+      const val = srcCell.value;
+      if (formula) {
+        // Works for regular and shared formulas (ExcelJS computes the adjusted formula)
+        dstCell.value = { formula };
+      } else if (val && typeof val === 'object' && val.sharedFormula) {
+        // Fallback for shared formula slaves where .formula getter failed:
+        // Reconstruct formula from master cell
+        const masterCell = template.getCell(val.sharedFormula);
+        if (masterCell.formula) {
+          const masterFormula = masterCell.formula;
+          const masterCol = val.sharedFormula.replace(/\d+/g, '');
+          // Replace master column reference with current column in the formula
+          const adjusted = masterFormula.replace(new RegExp(masterCol, 'g'), colLetter);
+          dstCell.value = { formula: adjusted };
+          log.debug(`Fórmula shared recuperada: ${colLetter}${r} = ${adjusted}`);
+        }
+      } else if (val !== null && val !== undefined) {
+        dstCell.value = val;
       }
 
       // Copy style (font, fill, alignment, border, numFmt)
@@ -404,6 +492,9 @@ function createSheetFromTemplate(workbook, sheetName, date) {
       try { newSheet.mergeCells(merge); } catch (e) { /* already merged */ }
     }
   }
+
+  // Ensure essential formulas exist (safety net if template copy failed)
+  ensureFormulas(newSheet, template);
 
   // Update B3 with the first day of the new month
   let month, year;
@@ -472,7 +563,39 @@ export async function updateSpreadsheet(transactions, date) {
   log.debug(`Última linha com nome de paciente: ${lastRow} → inserindo a partir de ${lastRow + 1}`);
 
   // Group transactions by patient + date to consolidate into one row
-  const groupedTransactions = groupTransactions(transactions);
+  const allGrouped = groupTransactions(transactions);
+
+  // Check for duplicates: skip groups that already exist in the sheet (same name + date + boleto value)
+  const existingRows = new Set();
+  for (let r = startScan; r <= lastRow; r++) {
+    const name = String(worksheet.getCell(`B${r}`).value || '').trim().toUpperCase();
+    const dateCell = worksheet.getCell(`A${r}`).value;
+    const dateStr = dateCell instanceof Date
+      ? `${dateCell.getFullYear()}-${String(dateCell.getMonth() + 1).padStart(2, '0')}-${String(dateCell.getDate()).padStart(2, '0')}`
+      : '';
+    const boleto = Number(worksheet.getCell(`${COLUMNS.BOLETO}${r}`).value) || 0;
+    existingRows.add(`${name}|${dateStr}|${boleto}`);
+  }
+
+  const groupedTransactions = allGrouped.filter(group => {
+    const name = group.patientName.trim().toUpperCase();
+    const groupDate = group.date || date;
+    // Calculate boleto total for this group
+    const boletoTotal = group.transactions
+      .filter(t => t.FormaPagamentoID === 4)
+      .reduce((sum, t) => sum + (Number(t.Value) || 0), 0);
+    const key = `${name}|${groupDate}|${boletoTotal}`;
+    if (existingRows.has(key)) {
+      log.debug(`Duplicata ignorada: ${name} em ${groupDate} (boleto R$${boletoTotal})`);
+      return false;
+    }
+    return true;
+  });
+
+  const skippedCount = allGrouped.length - groupedTransactions.length;
+  if (skippedCount > 0) {
+    log.info(`${skippedCount} grupo(s) ignorado(s) por já existirem na planilha`);
+  }
   log.info(`${groupedTransactions.length} grupos de movimentações para inserir`);
 
   // Prepare target rows: unmerge any merged cells and clear values/formatting

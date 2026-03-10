@@ -35,11 +35,13 @@ services:
       - TZ=America/Sao_Paulo
     env_file:
       - .env
+    ports:
+      - "${API_PORT:-3100}:${API_PORT:-3100}"
     volumes:
       - ./onedrive:/app/onedrive
       - ./logs:/app/logs
     # Cron interno roda à meia-noite
-    # Manual: docker compose exec agente-financeiro npm start
+    # POST /executar-boletos para rodar boletos manualmente
 
 volumes:
   onedrive-config:
